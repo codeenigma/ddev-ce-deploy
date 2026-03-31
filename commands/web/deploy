@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+#ddev-generated
+## Description: Run ce-deploy inside the web container to deploy your application
+## Usage: deploy [flags]
+## Example: "ddev deploy" or "ddev deploy --install" or "ddev deploy --own-branch devel-1.x" to use the devel-1.x branch or "ddev deploy --verbose" for extra Ansible verbosity
+## ProjectTypes: backdrop,cakephp,craftcms,drupal,drupal6,drupal7,drupal8,drupal9,drupal10,drupal11,generic,laravel,magento,magento2,php,shopware6,silverstripe,symfony,typo3,wordpress
+## ExecRaw: true
+## MutagenSync: true
+
+if [ ! -f ./deploy/deploy-ddev.yml ]; then
+  echo "ce-deploy cannot work without an Ansible playbook at ./deploy/deploy-ddev.yml!"
+  exit 1
+fi
+
+./.ddev/ce-deploy.sh --build-number 1 "$@"

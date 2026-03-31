@@ -1,0 +1,50 @@
+---
+- hosts: localhost
+  become: true
+  vars:
+    _domain_name: example.com
+    _ce_provision_build_tmp_dir: /tmp
+    _ce_provision_data_dir: /tmp
+    _ce_provision_username: "{{ ddev_user }}"
+    _venv_path: "/home/{{ _ce_provision_username }}/ansible"
+    _venv_command: /usr/bin/python3 -m venv
+    _venv_install_username: "{{ _ce_provision_username }}"
+    _ce_ansible_timer_name: upgrade_ce_provision_ansible
+    is_local: true
+    _env_type: utility
+    ce_deploy:
+      venv_path: "/home/{{ _ce_provision_username }}/ansible"
+      venv_command: /usr/bin/python3 -m venv
+      own_repository: https://gitlab.com/code-enigma/ce-deploy.git
+      config_repository: https://gitlab.com/code-enigma/ddev-ce-deploy-config.git
+      own_repository_branch: 1.x
+      config_repository_branch: 1.x
+      username: "{{ _ce_provision_username }}"
+      install_username: "{{ _ce_provision_username }}"
+      upgrade_timer_name: upgrade_ce_provision_ansible
+      new_user: true
+      local_dir: "/home/{{ _ce_provision_username }}/ce-deploy"
+      ansible_collections_dir: "/home/{{ _ce_provision_username }}/ce-deploy/galaxy/ansible_collections"
+      ce_provision_dir: "/home/{{ _ce_provision_username }}/ce-provision"
+      groups: []
+      galaxy_custom_requirements_file: ""
+      public_key_name: id_ed25519.pub
+      ssh_key_bits: "521"
+      ssh_key_type: ed25519
+      aws_support: true
+      scaleway_support: true
+      upgrade_galaxy:
+        enabled: false
+        on_calendar: "Mon *-*-* 04:00:00"
+    ce_ansible:
+      venv_path: "{{ _venv_path }}"
+      venv_command: "{{ _venv_command }}"
+      venv_install_username: "{{ _venv_install_username }}"
+      ansible_version: ""
+      upgrade:
+        enabled: false
+      linters:
+        enabled: true
+  roles:
+    - debian/ce_deploy
+

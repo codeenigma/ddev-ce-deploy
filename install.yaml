@@ -1,0 +1,30 @@
+name: ddev-ce-deploy
+ddev_version_constraint: ">= v1.24.0"
+project_files:
+  - "web-build/Dockerfile"
+  - "web-build/provision.yml"
+  - "ce-deploy.sh"
+  - "commands/web/deploy"
+  - "docker-compose.ce-deploy.yaml"
+post_install_actions:
+  - |
+    <?php
+    #ddev-description: Configure ce-deploy and update permissions
+    $projectName = $_ENV['DDEV_PROJECT'];
+    $docroot = $_ENV['DDEV_DOCROOT'];
+    $projectType = $_ENV['DDEV_PROJECT_TYPE'];
+
+    // Make deploy command executable
+    $deployCommandPath = 'commands/web/deploy';
+    if (file_exists($deployCommandPath)) {
+        chmod($deployCommandPath, 0755);
+        echo "Made deploy command executable\n";
+    }
+
+    // Make deploy script executable
+    $deployScriptPath = 'ce-deploy.sh';
+    if (file_exists($deployScriptPath)) {
+        chmod($deployScriptPath, 0755);
+        echo "Made deploy script executable\n";
+    }
+    ?>
