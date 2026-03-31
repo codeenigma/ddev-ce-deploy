@@ -193,3 +193,26 @@ This is then included in your `deploy-ddev.yml` in the following way.
 ```
 
 Make sure these are in the correct order. You want the common.yml file _first_, followed by the ddev.yml file to override variables in the common.yml file.
+
+## Troubleshooting
+Here are some known issues and workarounds.
+
+### Drupal files directory
+If you're deploying a Drupal application in DDEV with `ce-deploy` using a `drupal` project type can cause problems. When the DDEV project type is `drupal` it always wants to make the `sites/default/files` directory when you run `ddev start`. This clashes with `ce-deploy`, which always wants that same directory to be a symbolink link. Until we fix that you can either use project type of `php` and forego the `drush` integration from the CLI or manually remove `sites/default/files` after `ddev start` and before running `ddev deploy`.
+
+Another possibility is to start the project with a type of `php` so that DDEV does not try to install Drupal, run `ddev deploy` and then switch later to a `drupal` project with `ddev config --project-type drupal` to have `drush` support. It will give you an error about the files directory on start, but you can ignore it.
+
+### Drupal config import
+If you are running config import to Drupal with `ce-deploy` you might see this error:
+
+```
+Site UUID in source storage does not match the target storage.
+```
+
+If so, go to your config sync directory and look in the `system.site.yml` file. Copy the `uuid` value in that file and then run this command:
+
+```sh
+ddev drush cset "system.site" uuid "<your-uuid>"
+```
+
+Where `<your-uuid>` is the value you copied from the `system.site.yml` file.
