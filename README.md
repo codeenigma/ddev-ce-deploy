@@ -7,7 +7,7 @@ This is a DDEV add-on that prepares any project to use the [DDEV local developme
 Install this add-on with:
 
 ```bash
-ddev add-on get code-enigma/ddev-ce-deploy
+ddev add-on get codeenigma/ddev-ce-deploy
 ```
 
 ## Usage
