@@ -1,0 +1,613 @@
+#!/usr/bin/env bash
+#ddev-generated
+## Description: Fetch database from remote server and import locally (runs on host)
+## Usage: get-db [flags]
+## Examples:
+##   ddev get-db
+##   ddev get-db --project myproject --host dev.example.com
+##   ddev get-db -p myproject -e prod --verbose
+##   ddev get-db --project myproject --keep-remote
+## ProjectTypes: backdrop,cakephp,craftcms,drupal,drupal6,drupal7,drupal8,drupal9,drupal10,drupal11,generic,laravel,magento,magento2,php,shopware6,silverstripe,symfony,typo3,wordpress
+## ExecHost: true
+
+set -e
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Source helper library
+source "${SCRIPT_DIR}/lib/get-db-functions.sh"
+
+# Initialize variables
+PROJECT=""
+HOST=""
+USER="deploy"
+ENVIRONMENT="dev"
+MYSQL_CREDS=""
+DATABASE=""
+SKIP_CACHE_CLEAR=false
+SKIP_GZIP=false
+KEEP_REMOTE=false
+VERBOSE=false
+DRY_RUN=false
+
+# Usage message
+usage() {
+  cat <<EOF
+Fetch a database dump from a remote server and import it locally.
+
+Usage: ddev get-db [OPTIONS]
+
+Options:
+  -p, --project          Project name (required, prompted if not in config)
+  -h, --host             Remote server hostname (prompted if not in config)
+  -u, --user             Remote SSH user (default: deploy)
+  -e, --environment, --env  Environment name (default: dev)
+  --mysql-creds          Path to MySQL credentials file on remote
+  --database             Database name to dump (auto-detected if not set)
+  --no-cache-clear       Skip cache clearing
+  --no-gzip              Skip gzip compression (not recommended)
+  --keep-remote          Keep remote dump file after download
+  -v, --verbose          Verbose output for debugging
+  --dry-run              Show what would be executed without running
+
+Examples:
+  ddev get-db
+  ddev get-db --project myproject --host dev.example.com
+  ddev get-db -p myproject -e prod --verbose
+  ddev get-db --project myproject --keep-remote
+  ddev get-db -p myproject --no-cache-clear
+
+Configuration:
+  Settings are stored in .ddev/config.yaml under the 'get_db' section.
+  See README.md for configuration details.
+EOF
+}
+
+# Parse arguments
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      -p|--project)
+        PROJECT="$2"
+        shift 2
+        ;;
+      -h|--host)
+        HOST="$2"
+        shift 2
+        ;;
+      -u|--user)
+        USER="$2"
+        shift 2
+        ;;
+      -e|--environment|--env)
+        ENVIRONMENT="$2"
+        shift 2
+        ;;
+      --mysql-creds)
+        MYSQL_CREDS="$2"
+        shift 2
+        ;;
+      --database)
+        DATABASE="$2"
+        shift 2
+        ;;
+      --no-cache-clear)
+        SKIP_CACHE_CLEAR=true
+        shift
+        ;;
+      --no-gzip)
+        SKIP_GZIP=true
+        shift
+        ;;
+      --keep-remote)
+        KEEP_REMOTE=true
+        shift
+        ;;
+      -v|--verbose)
+        VERBOSE=true
+        shift
+        ;;
+      --dry-run)
+        DRY_RUN=true
+        shift
+        ;;
+      --help|-help|-h)
+        usage
+        exit 0
+        ;;
+      *)
+        log_error "Unknown option: $1"
+        usage
+        exit 1
+        ;;
+    esac
+  done
+}
+
+# Merge CLI args with loaded config
+merge_config_with_args() {
+  # Use config values if CLI args not provided
+  if [[ -z "$PROJECT" && -n "$GET_DB_PROJECT" ]]; then
+    PROJECT="$GET_DB_PROJECT"
+    log_verbose "Using project from config: $PROJECT"
+  fi
+
+  if [[ -z "$HOST" && -n "$ENV_HOST" ]]; then
+    HOST="$ENV_HOST"
+    log_verbose "Using host from config: $HOST"
+  fi
+
+  if [[ -z "$ENV_USER" && -n "$ENV_USER" ]]; then
+    USER="$ENV_USER"
+    log_verbose "Using user from config: $USER"
+  fi
+
+  if [[ -z "$MYSQL_CREDS" && -n "$ENV_CREDS" ]]; then
+    MYSQL_CREDS="$ENV_CREDS"
+    log_verbose "Using mysql creds from config: $MYSQL_CREDS"
+  fi
+
+  if [[ -z "$DATABASE" && -n "$ENV_DB" ]]; then
+    DATABASE="$ENV_DB"
+    log_verbose "Using database from config: $DATABASE"
+  fi
+
+  # Set default creds path if still empty
+  if [[ -z "$MYSQL_CREDS" && -n "$GET_DB_DEFAULT_CREDS" ]]; then
+    MYSQL_CREDS="$GET_DB_DEFAULT_CREDS"
+  fi
+}
+
+# Remote operations via SSH (these run on the remote server)
+remote_create_dump() {
+  local project_type="$1"
+  local database="$2"
+  local remote_path
+  remote_path=$(get_remote_path)
+  local creds_file
+  creds_file=$(get_mysql_creds_path)
+  local timestamp
+  timestamp=$(date +%Y%m%d_%H%M%S)
+  
+  # Use a directory in the user's home directory for dumps
+  local dump_dir="/home/$USER/db_dumps"
+  local dump_file="${dump_dir}/${PROJECT}-${ENVIRONMENT}-${timestamp}.sql.gz"
+  local sql_file="${dump_dir}/${PROJECT}-${ENVIRONMENT}-${timestamp}.sql"
+
+  log_info "Creating database dump on remote server..." >&2
+
+  local ssh_opts="-A -o BatchMode=yes -o ConnectTimeout=10"
+
+  # Step 0: Create dump directory if it doesn't exist
+  log_info "Step 0: Ensuring dump directory exists..." >&2
+  ssh $ssh_opts "${HOST}" "sudo -i -u $USER bash -c \"mkdir -p '$dump_dir' && chmod 755 '$dump_dir'\"" 2>&1 >&2
+
+  # Step 1: Create the SQL dump
+  log_info "Step 1: Creating SQL dump..." >&2
+  local dump_output=""
+  case "$project_type" in
+    drupal*|backdrop)
+      log_verbose "Using drush for database dump" >&2
+      dump_output=$(ssh $ssh_opts "${HOST}" "sudo -i -u $USER bash -c \"cd '$remote_path' && if [ ! -f vendor/bin/drush ]; then composer require drush/drush --dev --no-interaction 2>&1; fi && vendor/bin/drush sql-dump --result-file='$sql_file' --no-interaction\"" 2>&1)
+      ;;
+    wordpress)
+      log_verbose "Using wp-cli for database dump" >&2
+      dump_output=$(ssh $ssh_opts "${HOST}" "sudo -i -u $USER bash -c \"cd '$remote_path' && if [ ! -f vendor/bin/wp ]; then composer require wp-cli/wp-cli --dev --no-interaction 2>&1; fi && vendor/bin/wp db export '$sql_file'\"" 2>&1)
+      ;;
+    *)
+      log_verbose "Using mysqldump for database dump" >&2
+      if [[ -z "$database" ]]; then
+        log_error "Database name required for generic dump" >&2
+        exit 1
+      fi
+      dump_output=$(ssh $ssh_opts "${HOST}" "sudo -i -u $USER bash -c \"mysqldump --defaults-extra-file='$creds_file' --single-transaction '$database' > '$sql_file'\"" 2>&1)
+      ;;
+  esac
+
+  log_verbose "Dump output: $dump_output" >&2
+
+  # Step 2: Gzip the dump file
+  log_info "Step 2: Compressing dump file..." >&2
+  local gzip_output
+  gzip_output=$(ssh $ssh_opts "${HOST}" "sudo -i -u $USER bash -c \"gzip -f '$sql_file' && chmod 644 '$dump_file' && ls -la '$dump_file'\"" 2>&1)
+  local gzip_exit=$?
+
+  log_verbose "Gzip output: $gzip_output" >&2
+  log_verbose "Gzip exit code: $gzip_exit" >&2
+
+  if [[ $gzip_exit -ne 0 ]]; then
+    log_error "Failed to compress dump file" >&2
+    log_error "Gzip output: $gzip_output" >&2
+    exit 1
+  fi
+
+  # Step 3: Verify the file exists
+  log_info "Step 3: Verifying dump file..." >&2
+  local file_check
+  file_check=$(ssh $ssh_opts "${HOST}" "sudo -i -u $USER bash -c \"ls -la '$dump_file' 2>&1\"" 2>&1)
+  local file_exit=$?
+
+  log_verbose "File check output: $file_check" >&2
+  log_verbose "File check exit code: $file_exit" >&2
+
+  if [[ $file_exit -ne 0 ]]; then
+    log_error "Dump file not found: $dump_file" >&2
+    log_error "File check output: $file_check" >&2
+    exit 1
+  fi
+
+  # Only output the file path to stdout (for capture), everything else goes to stderr
+  log_info "Remote dump file created successfully" >&2
+  printf '%s' "$dump_file"
+}
+
+remote_check_tooling() {
+  local project_type="$1"
+  local remote_path
+  remote_path=$(get_remote_path)
+  local ssh_opts="-A -o BatchMode=yes -o ConnectTimeout=10"
+
+  case "$project_type" in
+    drupal*|backdrop)
+      ssh $ssh_opts "${HOST}" "sudo -i -u $USER bash -c \"test -f $remote_path/vendor/bin/drush && echo yes || echo no\""
+      ;;
+    wordpress)
+      ssh $ssh_opts "${HOST}" "sudo -i -u $USER bash -c \"test -f $remote_path/vendor/bin/wp && echo yes || echo no\""
+      ;;
+    *)
+      echo "not_needed"
+      ;;
+  esac
+}
+
+remote_install_drush() {
+  local remote_path
+  remote_path=$(get_remote_path)
+  local ssh_opts="-A -o BatchMode=yes -o ConnectTimeout=10"
+
+  log_info "Installing drush via composer..."
+  ssh $ssh_opts "${HOST}" "sudo -i -u $USER bash -c \"cd $remote_path && composer require drush/drush --dev --no-interaction\""
+}
+
+remote_install_wpcli() {
+  local remote_path
+  remote_path=$(get_remote_path)
+  local ssh_opts="-A -o BatchMode=yes -o ConnectTimeout=10"
+
+  log_info "Installing WP-CLI via composer..."
+  ssh $ssh_opts "${HOST}" "sudo -i -u $USER bash -c \"cd $remote_path && composer require wp-cli/wp-cli --dev --no-interaction\""
+}
+
+# Download dump from remote to local host
+download_dump() {
+  local remote_file="$1"
+  local timestamp
+  timestamp=$(date +%Y%m%d_%H%M%S)
+  LOCAL_DUMP_FILE="/tmp/ddev-getdb-${PROJECT}-${ENVIRONMENT}-${timestamp}.sql.gz"
+
+  log_info "Downloading database dump..."
+
+  # Clean the remote file path (remove any whitespace or extra characters)
+  remote_file=$(echo "$remote_file" | tr -d '\r\n' | xargs)
+  
+  log_verbose "Remote file path: '$remote_file'"
+  log_verbose "Local file path: '$LOCAL_DUMP_FILE'"
+  log_verbose "Host: '$HOST'"
+
+  local scp_opts="-o BatchMode=yes -o ConnectTimeout=10"
+
+  # SCP as local user (not the deploy user)
+  # Construct the full remote path
+  local remote_path="${HOST}:${remote_file}"
+  log_verbose "SCP command: scp $scp_opts -- '$remote_path' '$LOCAL_DUMP_FILE'"
+  
+  scp $scp_opts -- "$remote_path" "$LOCAL_DUMP_FILE"
+  local scp_exit=$?
+
+  if [[ $scp_exit -ne 0 ]]; then
+    log_error "Failed to download dump file"
+    log_error "SCP exit code: $scp_exit"
+    exit 1
+  fi
+
+  chmod 600 "$LOCAL_DUMP_FILE"
+  log_verbose "Downloaded to: $LOCAL_DUMP_FILE"
+}
+
+# Import dump into DDEV database (runs on host, uses ddev CLI)
+import_dump() {
+  local dump_file="$1"
+
+  log_info "Importing database into DDEV..."
+
+  if [[ ! -f "$dump_file" ]]; then
+    log_error "Dump file not found: $dump_file"
+    exit 1
+  fi
+
+  # Use ddev import-db (it handles .sql.gz files automatically)
+  if command -v ddev &> /dev/null; then
+    ddev import-db --file="$dump_file"
+  else
+    log_error "ddev command not found"
+    exit 1
+  fi
+
+  if [[ $? -ne 0 ]]; then
+    log_error "Database import failed"
+    exit 1
+  fi
+
+  log_info "Database imported successfully"
+}
+
+# Clear cache inside DDEV container
+clear_cache_in_container() {
+  local project_type="$1"
+
+  case "$project_type" in
+    drupal8|drupal9|drupal10|drupal11)
+      log_info "Clearing Drupal cache..."
+      ddev exec drush cr --no-interaction 2>/dev/null || {
+        log_warn "Drush cache clear failed, trying direct SQL"
+        ddev exec mysql -e "TRUNCATE TABLE cache; TRUNCATE TABLE cache_bootstrap; TRUNCATE TABLE cache_config; TRUNCATE TABLE cache_container; TRUNCATE TABLE cache_data; TRUNCATE TABLE cache_default; TRUNCATE TABLE cache_discovery; TRUNCATE TABLE cache_dynamic_page_cache; TRUNCATE TABLE cache_entity; TRUNCATE TABLE cache_menu; TRUNCATE TABLE cache_page; TRUNCATE TABLE cache_render; TRUNCATE TABLE cache_toolbar; TRUNCATE TABLE cachetag; TRUNCATE TABLE cachedata;" 2>/dev/null || true
+      }
+      ;;
+    drupal7|drupal6)
+      log_info "Clearing Drupal cache..."
+      ddev exec drush cc all --no-interaction -y 2>/dev/null || log_warn "Drush cache clear failed"
+      ;;
+    drupal)
+      log_info "Clearing Drupal cache..."
+      ddev exec drush cr --no-interaction 2>/dev/null || ddev exec drush cc all --no-interaction -y 2>/dev/null || log_warn "Cache clear failed"
+      ;;
+    wordpress)
+      log_info "Clearing WordPress cache..."
+      ddev exec wp cache flush 2>/dev/null || log_warn "WP cache flush failed"
+      ;;
+    laravel)
+      log_info "Clearing Laravel cache..."
+      ddev exec php artisan cache:clear
+      ddev exec php artisan config:clear
+      ddev exec php artisan route:clear
+      ddev exec php artisan view:clear
+      ;;
+    symfony)
+      log_info "Clearing Symfony cache..."
+      ddev exec php bin/console cache:clear --no-interaction
+      ;;
+    typo3)
+      log_info "Clearing TYPO3 cache..."
+      ddev exec typo3 cache:flush 2>/dev/null || log_warn "TYPO3 cache flush failed"
+      ;;
+    *)
+      log_warn "Unknown project type '$project_type', skipping cache clear"
+      ;;
+  esac
+}
+
+# Trigger post hook
+trigger_post_hook() {
+  local hook_file=".ddev/hooks/post-get-db"
+
+  if [[ -f "$hook_file" ]]; then
+    log_info "Running post-get-db hook..."
+    if [[ -x "$hook_file" ]]; then
+      "$hook_file"
+    else
+      bash "$hook_file"
+    fi
+    if [[ $? -ne 0 ]]; then
+      log_warn "Post-get-db hook failed"
+    fi
+  fi
+}
+
+# Cleanup
+cleanup_local() {
+  if [[ -f "$LOCAL_DUMP_FILE" ]]; then
+    log_verbose "Removing local dump file: $LOCAL_DUMP_FILE"
+    rm -f "$LOCAL_DUMP_FILE"
+  fi
+}
+
+cleanup_remote() {
+  local remote_file="$1"
+
+  if [[ "$KEEP_REMOTE" == true ]]; then
+    log_verbose "Keeping remote dump file: $remote_file"
+    return
+  fi
+
+  log_verbose "Removing remote dump file: $remote_file"
+  local ssh_opts="-A -o BatchMode=yes -o ConnectTimeout=10"
+  ssh $ssh_opts "${HOST}" "sudo -i -u $USER bash -c \"rm -f $remote_file\"" 2>/dev/null || log_warn "Could not remove remote dump file"
+}
+
+# Main execution flow
+main() {
+  parse_args "$@"
+
+  # Load and merge configuration
+  load_get_db_config
+  merge_config_with_args
+
+  # Interactive prompts for missing required values
+  if [[ -z "$PROJECT" ]]; then
+    prompt_project
+  fi
+
+  if [[ -z "$HOST" ]]; then
+    prompt_host
+  fi
+
+  # Final validation - ensure required values are set
+  if [[ -z "$PROJECT" ]]; then
+    log_error "Project name is required. Use --project <name> or configure in .ddev/config.yaml"
+    exit 1
+  fi
+
+  if [[ -z "$HOST" ]]; then
+    log_error "Host is required. Use --host <hostname> or configure in .ddev/config.yaml"
+    exit 1
+  fi
+
+  # Validate names
+  validate_project_name
+  validate_environment_name
+
+  # Save configuration for future use
+  if [[ -t 0 ]]; then
+    # Ask to save project
+    if [[ -n "$PROJECT" && "$PROJECT" != "$GET_DB_PROJECT" ]]; then
+      read -rp "Save project '$PROJECT' to config for future use? [Y/n]: " save_project
+      if [[ "$save_project" != "n" && "$save_project" != "N" ]]; then
+        PROJECT_SAVE=true
+      fi
+    fi
+    
+    # Ask to save host
+    if [[ -n "$HOST" && "$HOST" != "$ENV_HOST" ]]; then
+      read -rp "Save host '$HOST' for environment '$ENVIRONMENT' to config? [Y/n]: " save_host
+      if [[ "$save_host" != "n" && "$save_host" != "N" ]]; then
+        HOST_SAVE=true
+      fi
+    fi
+    
+    # Save if user agreed to either
+    if [[ "$PROJECT_SAVE" == true || "$HOST_SAVE" == true ]]; then
+      save_get_db_config "$PROJECT_SAVE" "$HOST_SAVE"
+      log_info "Configuration saved to $CONFIG_FILE"
+    fi
+  else
+    save_get_db_config false false
+  fi
+
+  # Validate prerequisites
+  check_ssh_agent
+
+  # Dry run mode
+  if [[ "$DRY_RUN" == true ]]; then
+    echo "=== DRY RUN MODE ==="
+    echo "Configuration:"
+    echo "  Project: $PROJECT"
+    echo "  Environment: $ENVIRONMENT"
+    echo "  Host: $HOST"
+    echo "  User: $USER"
+    echo "  Remote path: $(get_remote_path)"
+    echo "  MySQL creds: $(get_mysql_creds_path)"
+    echo "  Database: ${DATABASE:-auto-detect}"
+    echo "  Project type: ${DDEV_PROJECT_TYPE:-generic}"
+    echo "  Cache clear: $([ "$SKIP_CACHE_CLEAR" == true ] && echo "no" || echo "yes")"
+    echo "  Gzip: $([ "$SKIP_GZIP" == true ] && echo "no" || echo "yes")"
+    echo "  Keep remote: $KEEP_REMOTE"
+    echo ""
+    echo "Would execute:"
+    echo "  1. SSH to $USER@$HOST"
+    echo "  2. Create database dump on remote"
+    echo "  3. Download dump to local /tmp/"
+    echo "  4. Import with: ddev import-db"
+    echo "  5. Clear cache (${DDEV_PROJECT_TYPE:-generic})"
+    exit 0
+  fi
+
+  log_info "Starting database fetch from $HOST ($ENVIRONMENT)..."
+  log_verbose "Project: $PROJECT, User: $USER"
+
+  # Get remote path and credentials
+  local remote_path
+  remote_path=$(get_remote_path)
+  local creds_file
+  creds_file=$(get_mysql_creds_path)
+
+  log_verbose "Remote path: $remote_path"
+  log_verbose "MySQL credentials: $creds_file"
+
+  # Detect database if not provided
+  if [[ -z "$DATABASE" ]]; then
+    log_info "Detecting database name..."
+    DATABASE=$(detect_database_name "${DDEV_PROJECT_TYPE:-generic}")
+    if [[ -n "$DATABASE" ]]; then
+      log_verbose "Detected database: $DATABASE"
+    else
+      log_warn "Could not auto-detect database name"
+      if [[ -t 0 ]]; then
+        read -rp "Enter database name: " DATABASE
+        while [[ -z "$DATABASE" ]]; do
+          log_error "Database name is required"
+          read -rp "Enter database name: " DATABASE
+        done
+      else
+        log_error "Database name is required. Use --database <name>"
+        exit 1
+      fi
+    fi
+  fi
+
+  # Check remote directory exists
+  log_info "Verifying remote directory..."
+  local ssh_opts="-A -o BatchMode=yes -o ConnectTimeout=10"
+  if ! ssh $ssh_opts "${HOST}" "sudo -i -u $USER bash -c \"test -d $remote_path && echo yes || echo no\"" | grep -q "yes"; then
+    log_error "Remote directory does not exist: $remote_path"
+    log_info "Please check your project name and environment settings."
+    exit 1
+  fi
+
+  # Check and install tooling if needed
+  local project_type="${DDEV_PROJECT_TYPE:-generic}"
+  local tooling_check
+  tooling_check=$(remote_check_tooling "$project_type")
+
+  if [[ "$tooling_check" == "no" ]]; then
+    case "$project_type" in
+      drupal*|backdrop)
+        log_info "Drush not found on remote, installing..."
+        remote_install_drush
+        ;;
+      wordpress)
+        log_info "WP-CLI not found on remote, installing..."
+        remote_install_wpcli
+        ;;
+    esac
+  fi
+
+  # Create remote dump
+  log_info "Creating remote database dump..."
+  REMOTE_DUMP_FILE=$(remote_create_dump "$project_type" "$DATABASE")
+
+  log_verbose "REMOTE_DUMP_FILE value: '$REMOTE_DUMP_FILE'"
+
+  if [[ -z "$REMOTE_DUMP_FILE" ]]; then
+    log_error "Failed to create remote dump"
+    exit 1
+  fi
+
+  log_verbose "Remote dump file: $REMOTE_DUMP_FILE"
+
+  # Download dump
+  download_dump "$REMOTE_DUMP_FILE"
+
+  # Import database
+  import_dump "$LOCAL_DUMP_FILE"
+
+  # Cache clearing
+  if [[ "$SKIP_CACHE_CLEAR" == false ]]; then
+    clear_cache_in_container "$project_type"
+  else
+    log_info "Skipping cache clear (--no-cache-clear)"
+  fi
+
+  # Trigger post hook
+  trigger_post_hook
+
+  # Cleanup
+  cleanup_local
+  if [[ "$KEEP_REMOTE" == false ]]; then
+    cleanup_remote "$REMOTE_DUMP_FILE"
+  fi
+
+  log_info "✓ Database successfully imported from ${HOST}:${ENVIRONMENT}"
+}
+
+main "$@"

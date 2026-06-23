@@ -5,11 +5,13 @@ project_files:
   - "web-build/provision.yml"
   - "ce-deploy.sh"
   - "commands/web/deploy"
+  - "commands/host/get-db"
+  - "commands/host/lib/get-db-functions.sh"
   - "docker-compose.ce-deploy.yaml"
 post_install_actions:
   - |
     <?php
-    #ddev-description: Configure ce-deploy and update permissions
+    #ddev-description: Configure ce-deploy and get-db, update permissions
     $projectName = $_ENV['DDEV_PROJECT'];
     $docroot = $_ENV['DDEV_DOCROOT'];
     $projectType = $_ENV['DDEV_PROJECT_TYPE'];
@@ -26,5 +28,19 @@ post_install_actions:
     if (file_exists($deployScriptPath)) {
         chmod($deployScriptPath, 0755);
         echo "Made deploy script executable\n";
+    }
+
+    // Make get-db command executable
+    $getDbCommandPath = 'commands/host/get-db';
+    if (file_exists($getDbCommandPath)) {
+        chmod($getDbCommandPath, 0755);
+        echo "Made get-db command executable\n";
+    }
+
+    // Make get-db functions library executable
+    $getDbFunctionsPath = 'commands/host/lib/get-db-functions.sh';
+    if (file_exists($getDbFunctionsPath)) {
+        chmod($getDbFunctionsPath, 0755);
+        echo "Made get-db-functions.sh executable\n";
     }
     ?>
