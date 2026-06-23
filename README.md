@@ -194,8 +194,140 @@ This is then included in your `deploy-ddev.yml` in the following way.
 
 Make sure these are in the correct order. You want the common.yml file _first_, followed by the ddev.yml file to override variables in the common.yml file.
 
+## `ddev get-db` Command
+
+Fetch a database dump from a remote server and import it into your local DDEV environment.
+
+**Note:** This command runs on your **host machine** (not inside the DDEV container) so it can access your SSH agent and keys.
+
+### Quick Start
+
+```bash
+# First time setup - interactive prompts (will offer to save to config)
+ddev get-db
+
+# With all parameters
+ddev get-db --project myproject --host dev.example.com --environment dev --user deploy
+
+# Using saved configuration (subsequent runs)
+ddev get-db --environment prod
+
+# Verbose output for debugging
+ddev get-db -p myproject -e stage --verbose
+
+# Keep remote dump file
+ddev get-db --project myproject --keep-remote
+
+# Skip cache clearing
+ddev get-db --project myproject --no-cache-clear
+```
+
+### Configuration
+
+The command will automatically offer to save your project name and host to the config after the first run. You can also manually add settings to `.ddev/config.yaml`:
+
+```yaml
+get_db:
+  project: myproject
+  mysql_credentials_path: "/home/deploy/.mysql.creds"  # Optional default
+  environments:
+    dev:
+      host: dev.example.com
+      user: deploy
+      remote_path: "/home/deploy/deploy/myproject_dev/live.myproject_dev"
+      mysql_credentials_path: "/home/deploy/.mysql.creds"  # Optional override
+      database: myproject_dev  # Optional (auto-detected if not set)
+    stage:
+      host: stage.example.com
+      user: deploy
+      remote_path: "/home/deploy/deploy/myproject_stage/live.myproject_stage"
+    prod:
+      host: prod.example.com
+      user: deploy
+      remote_path: "/home/deploy/deploy/myproject_prod/live.myproject_prod"
+```
+
+### Options
+
+| Option | Alias | Default | Description |
+|--------|-------|---------|-------------|
+| `--project` | `-p` | (required) | Project name |
+| `--host` | `-h` | (from config) | Remote server hostname |
+| `--user` | `-u` | `deploy` | Remote SSH user |
+| `--environment` | `-e`, `--env` | `dev` | Environment name |
+| `--mysql-creds` | | `/home/{user}/.mysql.creds` | MySQL credentials file on remote |
+| `--database` | | (auto-detect) | Database name to dump |
+| `--no-cache-clear` | | false | Skip cache clearing |
+| `--no-gzip` | | false | Skip gzip compression |
+| `--keep-remote` | | false | Keep remote dump file after download |
+| `--verbose` | `-v` | false | Verbose output for debugging |
+| `--dry-run` | | false | Show what would be executed without running |
+
+### How It Works
+
+1. **Configuration**: Loads settings from `.ddev/config.yaml` or prompts for missing values (offers to save for future use)
+2. **SSH Connection**: Connects to remote server using your local SSH agent
+3. **User Switch**: Uses `sudo` to switch to the specified user on remote (default: deploy)
+4. **Navigate**: Changes to the remote project directory
+5. **Tooling Check**: Verifies drush (Drupal) or WP-CLI (WordPress) is installed, installs if needed
+6. **Database Detection**: Automatically detects database name from settings files
+7. **Create Dump**: Creates an SQL dump, then compresses it with gzip (separate steps for reliability)
+8. **Download**: Copies the dump file to your local machine via SCP
+9. **Import**: Imports the database into your local DDEV environment (auto-detects .sql.gz)
+10. **Cache Clear**: Clears application cache (Drupal, WordPress, Laravel, Symfony, etc.)
+11. **Cleanup**: Removes temporary dump files (unless `--keep-remote` specified)
+
+### MySQL Credentials
+
+The remote server should have a MySQL credentials file at `/home/{user}/.mysql.creds`:
+
+```ini
+[client]
+user=dbuser
+password=secret
+host=localhost
+```
+
+Override the default path with `--mysql-creds /path/to/creds`.
+
+### Supported Project Types
+
+Automatic cache clearing is supported for:
+
+| Project Type | Cache Clear Method |
+|-------------|-------------------|
+| Drupal 8-11 | `drush cr` |
+| Drupal 7 | `drush cc all` |
+| Drupal 6 | `drush cc all` |
+| WordPress | `wp cache flush` |
+| Laravel | `artisan cache:clear`, `config:clear`, `route:clear`, `view:clear` |
+| Symfony | `console cache:clear` |
+| Magento 2 | Framework-specific commands |
+| Craft CMS | Framework-specific commands |
+| TYPO3 | Framework-specific commands |
+
+For unknown project types, cache clearing is skipped with a warning.
+
+### Hooks
+
+Add a `.ddev/hooks/post-get-db` script to execute custom commands after database import:
+
+```bash
+#!/bin/bash
+echo "Running post-get-db tasks..."
+ddev exec drush updatedb -y
+ddev exec drush cim -y
+```
+
+### Security Notes
+
+- SSH authentication uses your local SSH agent only (no passwords)
+- MySQL credentials are stored on the remote server, not locally
+- Database dumps are compressed and stored in `/tmp/` with restricted permissions
+- Temporary files are cleaned up automatically after import
+
 ## Troubleshooting
-Here are some known issues and workarounds.
+Here are some issues to watch out for. Please note, although the `ddev get-db` command theoretically works for different kinds of application, to date it has only really been tested with Drupal.
 
 ### Drupal files directory
 If you're deploying a Drupal application in DDEV with `ce-deploy` using a `drupal` project type can cause problems. When the DDEV project type is `drupal` it always wants to make the `sites/default/files` directory when you run `ddev start`. This clashes with `ce-deploy`, which always wants that same directory to be a symbolink link. Until we fix that you can either use project type of `php` and forego the `drush` integration from the CLI or manually remove `sites/default/files` after `ddev start` and before running `ddev deploy`.
@@ -216,3 +348,32 @@ ddev drush cset "system.site" uuid "<your-uuid>"
 ```
 
 Where `<your-uuid>` is the value you copied from the `system.site.yml` file.
+
+### SSH Connection Issues
+```bash
+# Check SSH agent has keys (run on your host)
+ssh-add -l
+
+# Add key if needed
+ssh-add ~/.ssh/id_ed25519
+
+# Test connection manually
+ssh -A deploy@dev.example.com
+```
+
+**Note:** The `get-db` command runs on your **host machine**, not inside the DDEV container. This allows it to access your local SSH agent and keys. If you're getting "No SSH keys found" errors, make sure you've added your key to the SSH agent on your host.
+
+### Database Detection Fails
+```bash
+# Specify database name explicitly
+ddev get-db --project myproject --database mydb
+```
+
+### Verbose Debugging
+```bash
+# See detailed output
+ddev get-db --project myproject --verbose
+
+# Dry run to see commands
+ddev get-db --project myproject --dry-run
+```
