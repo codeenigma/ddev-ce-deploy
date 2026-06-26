@@ -3,9 +3,9 @@ ARG username
 ARG DEPLOY_USER=${username}
 
 # Defend against Sury GPG key issues
-RUN curl -sSLo /tmp/debsuryorg-archive-keyring.deb https://packages.sury.org/debsuryorg-archive-keyring.deb
-RUN dpkg -i /tmp/debsuryorg-archive-keyring.deb
-RUN sh -c 'echo "deb [signed-by=/usr/share/keyrings/debsuryorg-archive-keyring.gpg] https://packages.sury.org/php/ $(lsb_release -sc) main" > /etc/apt/sources.list.d/php.list'
+#RUN curl -sSLo /tmp/debsuryorg-archive-keyring.deb https://packages.sury.org/debsuryorg-archive-keyring.deb
+#RUN dpkg -i /tmp/debsuryorg-archive-keyring.deb
+#RUN sh -c 'echo "deb [signed-by=/usr/share/keyrings/debsuryorg-archive-keyring.gpg] https://packages.sury.org/php/ $(lsb_release -sc) main" > /etc/apt/sources.list.d/php.list'
 
 # Prepare for Ansible.
 RUN apt-get update && \
