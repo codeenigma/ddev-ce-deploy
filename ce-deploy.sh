@@ -63,7 +63,7 @@ cd "$HOME/ce-deploy"
 if [ "$CLEAN_INSTALL" = "yes" ] && [ -f "$HOME/ce-deploy/track/$BUILD_ID" ]; then
   rm "$HOME/ce-deploy/track/$BUILD_ID"
 fi
-CE_DEPLOY_ARGS="--build-id $BUILD_ID --build-number $BUILD_NUMBER --own-branch $OWN_BRANCH --playbook deploy/deploy-ddev.yml"
+CE_DEPLOY_ARGS="--build-id $BUILD_ID --build-number $BUILD_NUMBER --own-branch $OWN_BRANCH --playbook deploy/deploy-ddev.yml --python-interpreter ${HOME}/ansible/bin/python3"
 if [ "$VERBOSE" = "yes" ]; then
   CE_DEPLOY_ARGS="$CE_DEPLOY_ARGS --verbose"
 fi
