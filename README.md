@@ -139,7 +139,7 @@ cachetool:
 
 ### Default config
 
-When the add-on installer runs it will rebuild the web container, installing Ansible, ce-deploy and ce-provision. ce-deploy will fetch a config repo from [this location](https://gitlab.com/code-enigma/ddev-ce-deploy-config). This includes host vars for Ansible, an opinionated set of defaults. Be aware these will apply unless you overrider them with local variables (see next section). The defaults can be seen in [the `hosts/group_vars/all` directory of the repo](https://gitlab.com/code-enigma/ddev-ce-deploy-config/-/tree/1.x/hosts/group_vars/all).
+When the add-on installer runs it will rebuild the web container, installing Ansible, ce-deploy and ce-provision. ce-deploy will fetch a config repo from [this location](https://gitlab.com/code-enigma/ddev-ce-deploy-config). This includes host vars for Ansible, an opinionated set of defaults. Be aware these will apply unless you override them with local variables (see next section). The defaults can be seen in [the `hosts/group_vars/all` directory of the repo](https://gitlab.com/code-enigma/ddev-ce-deploy-config/-/tree/1.x/hosts/group_vars/all).
 
 ### Local Overrides With External Deployments
 
