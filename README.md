@@ -111,9 +111,9 @@ mysql_backup:
     - database: "{{ (project_name + '_' + build_type) | regex_replace('-', '_') }}" # avoid hyphens in MySQL database names
       user: "{{ (project_name + '_' + build_type) | truncate(32, true, '', 0) }}" # 32 char limit
       credentials_file: "/home/{{ _ce_provision_username }}/.my.cnf"
-  keep: 0
+  keep: 1
   credentials_handling: manual
-  handling: none
+  handling: dump
   databases:
     - database: db
       user: root
@@ -136,6 +136,10 @@ drupal:
 cachetool:
   adapter: "--fcgi=/var/run/php-fpm.sock"
 ```
+
+### Default config
+
+When the add-on installer runs it will rebuild the web container, installing Ansible, ce-deploy and ce-provision. ce-deploy will fetch a config repo from [this location](https://gitlab.com/code-enigma/ddev-ce-deploy-config). This includes host vars for Ansible, an opinionated set of defaults. Be aware these will apply unless you overrider them with local variables (see next section). The defaults can be seen in [the `hosts/group_vars/all` directory of the repo](https://gitlab.com/code-enigma/ddev-ce-deploy-config/-/tree/1.x/hosts/group_vars/all).
 
 ### Local Overrides With External Deployments
 
@@ -160,7 +164,8 @@ mysql_backup:
     - database: "{{ (project_name + '_' + build_type) | regex_replace('-', '_') }}" # avoid hyphens in MySQL database names
       user: "{{ (project_name + '_' + build_type) | truncate(32, true, '', 0) }}" # 32 char limit
       credentials_file: "/home/{{ _ce_provision_username }}/.my.cnf"
-  keep: 0
+  keep: 1
+  handling: dump
 maintenance_mode:
   mode: drupal-core
 deploy_code:
@@ -327,14 +332,17 @@ ddev exec drush cim -y
 - Temporary files are cleaned up automatically after import
 
 ## Troubleshooting
+
 Here are some issues to watch out for. Please note, although the `ddev get-db` command theoretically works for different kinds of application, to date it has only really been tested with Drupal.
 
 ### Drupal files directory
+
 If you're deploying a Drupal application in DDEV with `ce-deploy` using a `drupal` project type can cause problems. When the DDEV project type is `drupal` it always wants to make the `sites/default/files` directory when you run `ddev start`. This clashes with `ce-deploy`, which always wants that same directory to be a symbolink link. Until we fix that you can either use project type of `php` and forego the `drush` integration from the CLI or manually remove `sites/default/files` after `ddev start` and before running `ddev deploy`.
 
 Another possibility is to start the project with a type of `php` so that DDEV does not try to install Drupal, run `ddev deploy` and then switch later to a `drupal` project with `ddev config --project-type drupal` to have `drush` support. It will give you an error about the files directory on start, but you can ignore it.
 
 ### Drupal config import
+
 If you are running config import to Drupal with `ce-deploy` you might see this error:
 
 ```
@@ -349,7 +357,25 @@ ddev drush cset "system.site" uuid "<your-uuid>"
 
 Where `<your-uuid>` is the value you copied from the `system.site.yml` file.
 
-### SSH Connection Issues
+### PHP cachetool and older PHP versions
+
+Because DDEV includes the config for all supported versions of PHP on every web container, our version detector - which looks at the PHP versions installed in `/etc/php` - always thinks the container is running the latest version of PHP. This can cause ce-deploy to download an incorrect cachetool version. If that is the case, you can manually set the version in your variables like this:
+
+```yaml
+cachetool:
+  version: 10.1.0  # setting cachetool version for PHP 8.3
+```
+
+### Database backup
+
+If ce-deploy destroys your local database, as long as you have not altered the defaults there will be a zipped backup at `~/shared/mauriceharry_ddev/db_backups/mysql/build/db/db-1.sql.gz`. You can use this to restore the database to its state just prior to the deploy command. Be aware, if you run another deployment this will be overwritten! Here is a one-liner to restore the previous build database if your project is Drupal:
+
+```sh
+zcat ~/shared/mauriceharry_ddev/db_backups/mysql/build/db/db-1.sql.gz | mysql --defaults-file=~/.my.cnf db && /var/www/html/vendor/bin/drush cr
+```
+
+### SSH connection issues with `get-db`
+
 ```bash
 # Check SSH agent has keys (run on your host)
 ssh-add -l
@@ -363,13 +389,13 @@ ssh -A deploy@dev.example.com
 
 **Note:** The `get-db` command runs on your **host machine**, not inside the DDEV container. This allows it to access your local SSH agent and keys. If you're getting "No SSH keys found" errors, make sure you've added your key to the SSH agent on your host.
 
-### Database Detection Fails
+### Database detection fails with `get-db`
 ```bash
 # Specify database name explicitly
 ddev get-db --project myproject --database mydb
 ```
 
-### Verbose Debugging
+### Verbose debugging
 ```bash
 # See detailed output
 ddev get-db --project myproject --verbose
