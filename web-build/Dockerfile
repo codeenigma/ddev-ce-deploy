@@ -22,7 +22,7 @@ USER $DEPLOY_USER
 WORKDIR /home/$DEPLOY_USER
 
 RUN python3 -m venv ansible && \
-    ./ansible/bin/pip3 install ansible netaddr boto3 && \
+    ./ansible/bin/pip3 install ansible netaddr boto3 PyMySQL && \
     ./ansible/bin/ansible-galaxy collection install ansible.posix --force
 
 # Fetch ce-provision code.
